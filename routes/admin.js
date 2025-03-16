@@ -6,6 +6,7 @@ import Course from '../models/Course.js';
 import Badge from '../models/Badge.js';
 import Certificate from '../models/Certificate.js';
 import Category from '../models/Category.js';
+import CertificateTemplate from '../models/CertificateTemplate.js';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -253,6 +254,34 @@ router.post('/badges', [auth, adminAuth], async (req, res) => {
   }
 });
 
+// Badge Management Routes
+router.get('/badges', [auth, adminAuth], async (req, res) => {
+  try {
+    const badges = await Badge.find();
+    res.json(badges);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch badges" });
+  }
+});
+
+router.post('/badges', [auth, adminAuth], async (req, res) => {
+  try {
+    const badge = await Badge.create(req.body);
+    res.status(201).json(badge);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to create badge" });
+  }
+});
+
+router.delete('/badges/:id', [auth, adminAuth], async (req, res) => {
+  try {
+    await Badge.findByIdAndDelete(req.params.id);
+    res.json({ message: "Badge deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete badge" });
+  }
+});
+
 // Certificate Management
 router.post('/certificates/issue', [auth, adminAuth], async (req, res) => {
   try {
@@ -269,6 +298,75 @@ router.post('/certificates/issue', [auth, adminAuth], async (req, res) => {
     res.status(201).json(certificate);
   } catch (error) {
     res.status(500).json({ message: "Failed to issue certificate" });
+  }
+});
+
+// Certificate Template Management
+router.get('/certificates/templates', [auth, adminAuth], async (req, res) => {
+  try {
+    const templates = await CertificateTemplate.find().sort({ createdAt: -1 });
+    res.json(templates);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({ message: "Failed to fetch certificate templates" });
+  }
+});
+
+router.post('/certificates/templates', [auth, adminAuth], async (req, res) => {
+  try {
+    const { name, design, variables } = req.body;
+    
+    // Basic validation
+    if (!name || !design) {
+      return res.status(400).json({ message: "Name and design are required" });
+    }
+
+    // Check if default template exists when creating a new default
+    if (req.body.isDefault) {
+      await CertificateTemplate.updateMany(
+        { isDefault: true },
+        { $set: { isDefault: false } }
+      );
+    }
+
+    const template = await CertificateTemplate.create({
+      name,
+      design,
+      variables: variables || [],
+      isDefault: req.body.isDefault || false
+    });
+
+    res.status(201).json(template);
+  } catch (error) {
+    console.error('Error creating template:', error);
+    res.status(500).json({ 
+      message: "Failed to create certificate template",
+      error: error.message 
+    });
+  }
+});
+
+router.put('/certificates/templates/:id', [auth, adminAuth], async (req, res) => {
+  try {
+    const template = await CertificateTemplate.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    res.json(template);
+  } catch (error) {
+    console.error('Failed to update certificate template:', error);
+    res.status(500).json({ message: "Failed to update template" });
+  }
+});
+
+router.delete('/certificates/templates/:id', [auth, adminAuth], async (req, res) => {
+  try {
+    await CertificateTemplate.findByIdAndDelete(req.params.id);
+    res.json({ message: "Template deleted successfully" });
+  } catch (error) {
+    console.error('Failed to delete certificate template:', error);
+    res.status(500).json({ message: "Failed to delete template" });
   }
 });
 
@@ -316,33 +414,28 @@ router.post('/upload/video', auth, adminAuth, upload.single('video'), async (req
       return res.status(400).json({ message: 'No video file uploaded' });
     }
 
-    // Verify the file exists and is readable
     const filePath = req.file.path;
+    console.log('Video upload path:', filePath);
+
+    // Verify file exists and is readable
     try {
-      await fs.promises.access(filePath, fs.constants.R_OK);
       const stats = await fs.promises.stat(filePath);
-      
       if (stats.size === 0) {
-        fs.unlinkSync(filePath);
+        await fs.promises.unlink(filePath);
         return res.status(400).json({ message: 'Uploaded file is empty' });
       }
     } catch (error) {
+      console.error('File validation error:', error);
       return res.status(400).json({ message: 'File validation failed' });
     }
 
     const videoUrl = `/uploads/videos/${req.file.filename}`;
-    console.log('Video uploaded successfully:', {
-      filename: req.file.filename,
-      path: filePath,
-      url: videoUrl,
-      size: req.file.size
-    });
+    console.log('Video URL:', videoUrl);
 
     res.json({
       message: 'Video uploaded successfully',
       url: videoUrl,
-      filename: req.file.filename,
-      size: req.file.size
+      filename: req.file.filename
     });
   } catch (error) {
     console.error('Video upload error:', error);
@@ -357,6 +450,39 @@ router.get('/test-video/:filename', [auth, adminAuth], (req, res) => {
     res.json({ exists: true, path: filepath });
   } else {
     res.json({ exists: false, path: filepath });
+  }
+});
+
+// Add this new route near the top with other GET routes
+router.get('/stats', [auth, adminAuth], async (req, res) => {
+  try {
+    const stats = {
+      users: {
+        total: await User.countDocuments(),
+        active: await User.countDocuments({ 
+          lastActive: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        }),
+        new: await User.countDocuments({ 
+          createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        })
+      },
+      courses: {
+        total: await Course.countDocuments(),
+        active: await Course.countDocuments({ status: 'active' }),
+        pending: await Course.countDocuments({ status: 'pending' })
+      },
+      system: {
+        status: 'operational',
+        uptime: '99.9%',
+        errors: 0,
+        storage: '75%'
+      }
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Admin stats error:', error);
+    res.status(500).json({ message: "Failed to fetch admin statistics" });
   }
 });
 

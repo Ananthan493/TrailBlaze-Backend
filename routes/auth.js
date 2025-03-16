@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import auth from '../middleware/auth.js';  // Add this import
 
 const router = express.Router();
 
@@ -20,43 +21,50 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log('Login attempt:', { email }); // Debug log
-
-    const user = await User.findOne({ email });
     
+    // Find user
+    const user = await User.findOne({ email });
     if (!user) {
-      console.log('User not found:', email);
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    console.log('Password match:', isMatch); // Debug log
-
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
+    // Generate token
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { userId: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    console.log('Login successful:', email);
+    // Send response without password
+    const userWithoutPassword = {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    };
 
-    res.json({
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        learningStyle: user.learningStyle
-      }
-    });
+    res.json({ token, user: userWithoutPassword });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: "Login failed", error: error.message });
+    res.status(500).json({ message: 'Server error during login' });
+  }
+});
+
+router.get('/verify', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ user });
+  } catch (error) {
+    res.status(401).json({ message: 'Invalid token' });
   }
 });
 

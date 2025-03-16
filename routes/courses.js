@@ -5,6 +5,8 @@ import User from '../models/User.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import generateCertificate from '../utils/certificateGenerator.js';
+import mongoose from 'mongoose';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,12 +105,10 @@ router.get('/:courseId', auth, async (req, res) => {
   try {
     console.log('Fetching course details for ID:', req.params.courseId);
     
-    const videosDir = path.join(__dirname, '../uploads/videos');
-    console.log('Videos directory:', videosDir);
-
-    // Ensure videos directory exists
-    if (!fs.existsSync(videosDir)) {
-      fs.mkdirSync(videosDir, { recursive: true });
+    // Ensure models directory exists
+    const modelsDir = path.join(__dirname, '../uploads/models');
+    if (!fs.existsSync(modelsDir)) {
+      fs.mkdirSync(modelsDir, { recursive: true });
     }
 
     const course = await Course.findById(req.params.courseId)
@@ -119,87 +119,49 @@ router.get('/:courseId', auth, async (req, res) => {
       return res.status(404).json({ message: "Course not found" });
     }
 
-    // Debug the raw content before transformation
-    console.log('Raw course content:', course.content);
-
-    // Transform and validate video content
+    // Transform and validate content
     if (course.content) {
       course.content = course.content.map(item => {
-        // Ensure item is properly structured
         if (!item || typeof item !== 'object') {
-          console.error('Invalid content item:', item);
           return null;
         }
 
-        if (item.type === 'video') {
-          console.log('Processing video item:', {
-            title: item.title,
-            originalData: item.data
-          });
+        if (item.type === 'ar') {
+          const modelFileName = item.arModel || 'basic-cube.glb';
+          const modelPath = `/uploads/models/${modelFileName}`;
+          const fullPath = path.join(__dirname, '..', modelPath);
+          const defaultModelPath = path.join(__dirname, '..', 'public', 'models', 'basic-cube.glb');
 
-          // Handle missing or invalid data
-          if (!item.data) {
-            return {
-              ...item,
-              status: 'error',
-              message: 'Video data is missing',
-              data: null
-            };
-          }
-
-          const filename = path.basename(item.data);
-          const videoPath = path.join(videosDir, filename);
-          
-          console.log('Checking video file:', {
-            filename,
-            path: videoPath,
-            exists: fs.existsSync(videoPath)
-          });
-
-          if (fs.existsSync(videoPath)) {
-            const stats = fs.statSync(videoPath);
-            if (stats.size > 0) {
-              return {
-                ...item,
-                data: `/uploads/videos/${filename}`,
-                status: 'ready',
-                size: stats.size
-              };
-            }
+          // If model doesn't exist, copy default model
+          if (!fs.existsSync(fullPath) && fs.existsSync(defaultModelPath)) {
+            fs.copyFileSync(defaultModelPath, fullPath);
           }
 
           return {
             ...item,
-            data: null,
-            status: 'error',
-            message: 'Video file not found or empty'
+            data: modelPath,
+            status: fs.existsSync(fullPath) ? 'ready' : 'pending',
+            message: fs.existsSync(fullPath) ? undefined : 'AR model is being prepared...'
           };
         }
 
         return item;
-      }).filter(Boolean); // Remove any null items
+      }).filter(Boolean);
     }
 
-    // Log the final processed content
+    // Log the processed content
     console.log('Processed course content:', course.content.map(c => ({
       type: c.type,
       title: c.title,
       status: c.status,
-      hasData: !!c.data,
-      dataPath: c.data
+      hasData: Boolean(c.data),
+      path: c.data
     })));
 
     res.json(course);
   } catch (error) {
-    console.error('Course detail error:', {
-      error: error.message,
-      stack: error.stack,
-      courseId: req.params.courseId
-    });
-    res.status(500).json({ 
-      message: "Failed to fetch course details",
-      error: error.message
-    });
+    console.error('Course detail error:', error);
+    res.status(500).json({ message: "Failed to fetch course details" });
   }
 });
 
@@ -225,54 +187,197 @@ router.get('/:courseId/enrollment', auth, async (req, res) => {
 // Enroll in course
 router.post('/:courseId/enroll', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    const course = await Course.findById(req.params.courseId);
-    
-    if (!course) {
-      return res.status(404).json({ message: "Course not found" });
+    const courseId = req.params.courseId?.trim();
+    console.log('Starting enrollment process:', { courseId, userId: req.userId });
+
+    // Basic validation
+    if (!courseId || !mongoose.Types.ObjectId.isValid(courseId)) {
+      console.error('Invalid course ID:', courseId);
+      return res.status(400).json({ 
+        message: "Invalid course ID",
+        code: "INVALID_ID"
+      });
     }
 
-    const isEnrolled = user.progress.some(p => 
-      p.courseId.toString() === req.params.courseId
+    // Find user with error handling
+    let user;
+    try {
+      user = await User.findById(req.userId);
+      if (!user) {
+        console.error('User not found:', req.userId);
+        return res.status(404).json({ 
+          message: "User not found",
+          code: "USER_NOT_FOUND"
+        });
+      }
+
+      // Ensure user has a learning style
+      if (!user.analyzedLearningStyle) {
+        user.analyzedLearningStyle = 'visual'; // Set default if missing
+      }
+
+    } catch (userError) {
+      console.error('Error finding user:', userError);
+      return res.status(500).json({ 
+        message: "Database error while finding user",
+        error: userError.message
+      });
+    }
+
+    // Find course with error handling
+    let course;
+    try {
+      course = await Course.findById(courseId);
+      if (!course) {
+        console.error('Course not found:', courseId);
+        return res.status(404).json({ 
+          message: "Course not found",
+          code: "COURSE_NOT_FOUND"
+        });
+      }
+    } catch (courseError) {
+      console.error('Error finding course:', courseError);
+      return res.status(500).json({ 
+        message: "Database error while finding course",
+        error: courseError.message
+      });
+    }
+
+    // Initialize progress array if needed
+    if (!Array.isArray(user.progress)) {
+      user.progress = [];
+    }
+
+    // Check for existing enrollment
+    const existingEnrollment = user.progress.find(
+      p => p.courseId?.toString() === courseId
     );
 
-    if (isEnrolled) {
-      return res.status(400).json({ message: "Already enrolled" });
+    if (existingEnrollment) {
+      console.log('User already enrolled:', { userId: req.userId, courseId });
+      return res.status(200).json({ 
+        message: "Already enrolled in this course",
+        enrollment: existingEnrollment,
+        code: "ALREADY_ENROLLED"
+      });
     }
 
-    user.progress.push({
-      courseId: req.params.courseId,
+    // Create new progress entry
+    const newProgress = {
+      courseId,
       completion: 0,
-      lastAccessed: new Date()
+      contentProgress: new Map(),
+      lastAccessed: new Date(),
+      enrollmentDate: new Date()
+    };
+
+    // Add to user's progress
+    user.progress.push(newProgress);
+
+    // Save with error handling
+    try {
+      await user.save();
+      console.log('Enrollment successful:', { userId: req.userId, courseId, learningStyle: user.analyzedLearningStyle });
+      
+      res.status(201).json({
+        message: "Successfully enrolled",
+        enrollment: newProgress,
+        code: "ENROLLMENT_SUCCESS"
+      });
+    } catch (saveError) {
+      console.error('Error saving enrollment:', saveError);
+      return res.status(500).json({ 
+        message: "Failed to save enrollment data",
+        error: saveError.message
+      });
+    }
+
+  } catch (error) {
+    console.error('Enrollment error:', {
+      error: error.message,
+      stack: error.stack,
+      courseId: req.params.courseId,
+      userId: req.userId
     });
 
-    await user.save();
-    res.json({ message: "Successfully enrolled" });
-  } catch (error) {
-    console.error('Enrollment error:', error);
-    res.status(500).json({ message: "Failed to enroll" });
+    res.status(500).json({
+      message: "Failed to process enrollment",
+      error: error.message,
+      code: "ENROLLMENT_ERROR"
+    });
   }
 });
 
 // Update course progress
 router.post('/:courseId/progress', auth, async (req, res) => {
   try {
-    const { completion } = req.body;
+    const { completion, contentProgress } = req.body;
     const user = await User.findById(req.userId);
-    const progressIndex = user.progress.findIndex(
-      p => p.courseId.toString() === req.params.courseId
-    );
+    const course = await Course.findById(req.params.courseId);
 
-    if (progressIndex === -1) {
-      return res.status(400).json({ message: "Not enrolled in this course" });
+    if (!user || !course) {
+      return res.status(404).json({ message: "User or course not found" });
     }
 
-    user.progress[progressIndex].completion = completion;
-    user.progress[progressIndex].lastAccessed = new Date();
+    // Update progress
+    await User.findOneAndUpdate(
+      { _id: req.userId, 'progress.courseId': req.params.courseId },
+      {
+        $set: {
+          'progress.$.completion': completion,
+          'progress.$.contentProgress': contentProgress,
+          'progress.$.lastAccessed': new Date()
+        }
+      }
+    );
 
-    await user.save();
-    res.json({ message: "Progress updated successfully" });
+    // Generate certificate if course is completed
+    if (completion === 100) {
+      try {
+        console.log('Generating certificate for:', {
+          user: user.name,
+          course: course.title
+        });
+
+        const certificatePath = await generateCertificate(
+          user.name,
+          course.title,
+          new Date().toLocaleDateString()
+        );
+
+        // Save certificate reference
+        await User.findOneAndUpdate(
+          { _id: req.userId, 'progress.courseId': req.params.courseId },
+          {
+            $set: {
+              'progress.$.certificatePath': certificatePath,
+              'progress.$.completionDate': new Date()
+            }
+          }
+        );
+
+        return res.json({
+          message: "Progress updated and certificate generated",
+          completion,
+          certificatePath
+        });
+      } catch (certError) {
+        console.error('Certificate generation error:', certError);
+        // Still return success but with a note about certificate failure
+        return res.json({
+          message: "Progress updated but certificate generation failed",
+          completion,
+          certificateError: certError.message
+        });
+      }
+    }
+
+    res.json({
+      message: "Progress updated successfully",
+      completion
+    });
   } catch (error) {
+    console.error('Progress update error:', error);
     res.status(500).json({ message: "Failed to update progress" });
   }
 });
@@ -280,25 +385,85 @@ router.post('/:courseId/progress', auth, async (req, res) => {
 // Get course certificate
 router.get('/:courseId/certificate', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    const progress = user.progress.find(
-      p => p.courseId.toString() === req.params.courseId
-    );
+    const certificatesDir = path.join(__dirname, '../uploads/certificates');
+    fs.mkdirSync(certificatesDir, { recursive: true });
 
-    if (!progress || progress.completion < 100) {
-      return res.status(400).json({ 
-        message: "Certificate not available. Complete the course first." 
-      });
+    const user = await User.findById(req.userId);
+    const course = await Course.findById(req.params.courseId);
+    
+    if (!course || !user) {
+      return res.status(404).json({ message: "Course or user not found" });
     }
 
-    // Generate certificate logic here
-    // For now, sending a placeholder response
-    res.json({ 
-      certificateUrl: `certificate-${req.params.courseId}.pdf`,
-      issueDate: new Date()
+    // Check if user has completed the course
+    const userProgress = user.progress.find(p => 
+      p.courseId.toString() === req.params.courseId
+    );
+
+    if (!userProgress || userProgress.completion !== 100) {
+      return res.status(403).json({ message: "Course not completed" });
+    }
+
+    console.log('Generating certificate for:', {
+      user: user.name,
+      course: course.title,
+      date: new Date().toLocaleDateString()
     });
+
+    const certificatePath = await generateCertificate(
+      user.name,
+      course.title,
+      new Date().toLocaleDateString()
+    );
+
+    const absolutePath = path.join(__dirname, '..', certificatePath);
+    
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error('Certificate file not found after generation');
+    }
+
+    const filename = `certificate-${course.title.replace(/[^a-z0-9]/gi, '_')}.pdf`;
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': fs.statSync(absolutePath).size,
+      'Cache-Control': 'no-cache'
+    });
+
+    const stream = fs.createReadStream(absolutePath);
+    
+    stream.on('error', (error) => {
+      console.error('Stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Error streaming certificate" });
+      }
+    });
+
+    stream.pipe(res);
   } catch (error) {
+    console.error('Certificate generation error:', error);
     res.status(500).json({ message: "Failed to generate certificate" });
+  }
+});
+
+// Add route to view certificate
+router.get('/certificates/:filename', auth, (req, res) => {
+  try {
+    const certificatePath = path.join(__dirname, '../uploads/certificates', req.params.filename);
+    
+    if (!fs.existsSync(certificatePath)) {
+      return res.status(404).json({ message: "Certificate not found" });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    
+    const fileStream = fs.createReadStream(certificatePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error('Certificate view error:', error);
+    res.status(500).json({ message: "Failed to view certificate" });
   }
 });
 

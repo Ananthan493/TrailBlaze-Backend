@@ -1,0 +1,21 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Base64 encoded minimal GLB file containing a basic cube
+const glbData = 'Z2xURgIAAADsAgAAUE9TU0lCTEVfTE9TU1kAAAAABAAAAAAAAABDSFVOSwAAAABKAAAAQklOAAAAAAEAAAACAAAAAgAAAAIAAAADAAAAAwAAAAMAAAAEAAAABAAAAAQAAAABAAAAAQAAAAEAAAACAAAAAgAAAAIAAAADAAAAAwAAAAQAAAABAAAAAgAAAAMAAAAEAAAASlNPTgAAAAB7CiAgIm9yaWdpbiI6IFsxLjAsIDEuMCwgMS4wXSwKICAic2NlbmUiOiAwLAogICJzY2VuZXMiOiBbCiAgICB7CiAgICAgICJub2RlcyI6IFsKICAgICAgICB7CiAgICAgICAgICAibWVzaCI6IDAsCiAgICAgICAgICAibmFtZSI6ICJCYXNpY0N1YmUiCiAgICAgICAgfQogICAgICBdCiAgICB9CiAgXSwKICAibWVzaGVzIjogWwogICAgewogICAgICAicHJpbWl0aXZlcyI6IFsKICAgICAgICB7CiAgICAgICAgICAiYXR0cmlidXRlcyI6IHsKICAgICAgICAgICAgIlBPU0lUSU9OIjogMAogICAgICAgICAgfSwKICAgICAgICAgICJpbmRpY2VzIjogMQogICAgICAgIH0KICAgICAgXQogICAgfQogIF0sCiAgImFjY2Vzc29ycyI6IFsKICAgIHsKICAgICAgImJ1ZmZlclZpZXciOiAwLAogICAgICAiY29tcG9uZW50VHlwZSI6IDUxMjYsCiAgICAgICJjb3VudCI6IDI0LAogICAgICAidHlwZSI6ICJWRUMzIgogICAgfSwKICAgIHsKICAgICAgImJ1ZmZlclZpZXciOiAxLAogICAgICAiY29tcG9uZW50VHlwZSI6IDUxMjMsCiAgICAgICJjb3VudCI6IDM2LAogICAgICAidHlwZSI6ICJTQ0FMQVIiCiAgICB9CiAgXSwKICAiYnVmZmVyVmlld3MiOiBbCiAgICB7CiAgICAgICJidWZmZXIiOiAwLAogICAgICAiYnl0ZUxlbmd0aCI6IDI4OCwKICAgICAgImJ5dGVPZmZzZXQiOiAwCiAgICB9LAogICAgewogICAgICAiYnVmZmVyIjogMCwKICAgICAgImJ5dGVMZW5ndGgiOiAxNDQsCiAgICAgICJieXRlT2Zmc2V0IjogMjg4CiAgICB9CiAgXSwKICAiYnVmZmVycyI6IFsKICAgIHsKICAgICAgImJ5dGVMZW5ndGgiOiA0MzIKICAgIH0KICBdCn0=';
+
+// Create directories if they don't exist
+const modelsDir = path.join(__dirname, '../public/models');
+if (!fs.existsSync(modelsDir)) {
+  fs.mkdirSync(modelsDir, { recursive: true });
+}
+
+// Write the GLB file
+const filePath = path.join(modelsDir, 'basic-cube.glb');
+fs.writeFileSync(filePath, Buffer.from(glbData, 'base64'));
+
+console.log('Basic cube GLB file created at:', filePath);
